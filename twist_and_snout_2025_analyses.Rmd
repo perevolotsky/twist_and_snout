@@ -1,0 +1,177 @@
+---
+title: "Twist and Snout 2025 analyses"
+output: html_notebook
+---
+
+Load packages
+```{r}
+rm(list= ls())
+if (!require(pacman)) install.packages('pacman')
+library(pacman)
+
+p_load(tidyverse, ggpubr, phyr, corrplot, ape)
+```
+
+Load data files
+```{r}
+kinematics = read.csv(r"(kinematic_results.csv)")
+model_data = read.csv(r"(model_data.csv)")
+my_phy = read.tree('new_phylo2.tre')
+```
+
+calculate additional variables from data
+```{r}
+#add lateral MOI to model info
+model_data = model_data %>% 
+  dplyr::mutate(lateral_moi = dorsal_moi+anal_moi+sum_moi_body,
+                head_vs_lateral_moi = sum_moi_head/lateral_moi,
+                all_lateral_moi = all_fin_moi+sum_moi_body)
+
+#get absolute values of body displacement during the flick (abs_bodyflick) and head angular speed during flick (abs_angular_v)
+kinematics = kinematics %>% 
+  dplyr::mutate(abs_bodyflick = abs(maxmin_dtheta_body_flick),
+         abs_angular_v = abs(angular_v),
+         abs_angular_v_degs = (abs_angular_v*180)/pi)
+
+#calculate mean values of body displacement and flick speed for each model
+sum_kinematics = kinematics %>% 
+  group_by(model) %>%
+  dplyr::summarise(mean_bodyflick  = mean(abs_bodyflick), sd_bodyflick = sd(abs_bodyflick), mean_speed = mean(abs_angular_v_degs), sd_speed = sd(abs_angular_v_degs))
+
+#merge model data and summarized kinematics
+all_data = merge(model_data,sum_kinematics, by="model")
+```
+
+Test for phylogenetically corrected correlations between control surfaces
+```{r}
+surfaces = all_data %>% 
+dplyr::select(species, sum_moi_head, sum_moi_body, anal_moi, caudal_moi, dorsal_moi, pelvic_moi, all_lateral_moi)
+
+phy_cor = cor_phylo(variates = ~ sum_moi_head + sum_moi_body + anal_moi + caudal_moi + dorsal_moi + pelvic_moi,
+          species = ~ species,
+          phy = my_phy,
+          data = surfaces,
+          boot=0,
+          keep_boots = "all"
+          )
+
+phy_cor$corrs
+
+```
+
+
+plot the species by their head and body MOI (fig 3)
+```{r}
+moi_space = ggplot(all_data, aes(x = sum_moi_head, y = sum_moi_body))+
+  geom_point(color = "blueviolet", size = 5)+
+  geom_text(aes(label=sci_name),hjust=-0.15)+
+  labs(x ="Head MOI"  , y = "Body MOI")+
+  theme_classic()+
+  theme(legend.position = "none",
+        axis.text.y = element_text(angle=90, hjust= 0.5),
+        axis.title.y = element_text(size = 10, vjust= 2),
+        axis.title.x = element_text(size = 10))+
+  xlim(1900, 3700);moi_space
+```
+
+plot the relative contribution of each control surface (fig 4)
+```{r}
+#order species by tree tips
+sp = c( "acanthurus_nigrofuscus",
+        "acanthurus_fowleri",
+        "zebrasoma_xanthurum",
+        "naso_unicornis",
+        "siganus_vulpinus", 
+        "siganus_rivulatus", 
+        "chaetodon_melapterus",
+        "chaetodon_auriga",
+        "pomacanthus_imperator",
+        "centropyge_multispinis", 
+        "microcanthus_strigatus", 
+        "kyphosus_cinerascens",
+        "iniistius_pavo", 
+        "anampses_caeruleopunctatus",
+        "calotomus_viridescens",
+        "pomacentrus_aquilus",
+        "Plectroglyphidodon_lacrymatus")
+
+#reverse order because ggplot is annoying
+rev_sp = rev(sp)
+
+
+surfaces = surfaces %>%
+  mutate(body_rel_cont = sum_moi_body/all_lateral_moi,
+         anal_rel_cont = anal_moi/all_lateral_moi,
+         caudal_rel_cont = caudal_moi/all_lateral_moi,
+         dorsal_rel_cont = dorsal_moi/all_lateral_moi,
+         pelvic_rel_cont = pelvic_moi/all_lateral_moi) %>% 
+  pivot_longer(cols = 9:12,
+               names_to = "control_surface",
+               values_to = "relative_moi") %>% 
+  mutate(species = factor(species, levels= rev_sp),
+         control_surface_f = factor(control_surface, levels= c("anal_rel_cont",
+                                               "dorsal_rel_cont",
+                                               "caudal_rel_cont",
+                                               "body_rel_cont")))
+  
+
+purple_plot = ggplot(data = surfaces, aes(x = species, y = relative_moi))+
+  geom_bar(position="dodge", stat="identity", width = 0.9, aes(fill = control_surface_f))+
+  facet_wrap(~control_surface_f, ncol = 1, nrow = 5, scales = "free_y")+
+  scale_fill_manual(values = c( "#FA00FF", "#a901cf", "#9600FF", "#6A00FF"))+
+  theme_classic()+
+  theme(
+  axis.text.x=element_text(size=10, angle = 60, hjust = 1),
+        axis.ticks.x=element_blank(),
+  axis.text.y = element_text(size=10),
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.spacing.y = unit(0.5, "lines"),
+  legend.position = "none"
+);purple_plot
+
+```
+
+
+plot the relationship between head and body MOI and kinematics (fig 5)
+```{r}
+p1 = ggplot(all_data, aes(x = sum_moi_head, y = mean_speed))+
+  geom_point(size = 4, color = "blueviolet")+
+  labs(x = bquote('Moment of Inertia of the Head ('*g~"\U00B7"~mm^2*')')  , y = bquote('Head Angular Speed ('*~ 'deg' ~s^-1*')') , color = "Species")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 8, color = "black"),
+        axis.text.y = element_text(size = 8, color = "black"),
+        axis.title.y = element_text(size = 10, vjust= 2),
+        axis.title.x = element_text(size = 10, vjust= -0.1))+
+  geom_smooth(method = "lm", color = "black");p1
+
+p2=ggplot(all_data, aes(x = head_vs_lateral_moi, y = mean_bodyflick))+
+  geom_point(size = 4, color = "blueviolet")+
+  labs(x ="Head/Lateral MOI"  , y = bquote('Body Angular Displacement (degs)') , color = "Species")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 8, color = "black"),
+        axis.text.y = element_text(size = 8, color = "black"),
+        axis.title.y = element_text(size = 10, vjust= 2),
+        axis.title.x = element_text(size = 10, vjust= -0.1))+
+  geom_smooth(method = "lm", color = "black");p2
+
+p3 = ggarrange(p1,  p2, ncol = 2, nrow = 1, widths = c(1, 1), labels = c('A', 'B'), vjust = -0.2, hjust = 1)+
+  theme(plot.margin = margin(0.5,0.3,0.1,0.4, "cm"));p3
+```
+
+perform a linear model to statistically test this relationship
+```{r}
+#how does head MOI affect head flick speed
+head_flick_model = lm(mean_speed~sum_moi_head, data = all_data)
+summary(head_flick_model)
+
+#how does relative MOI (head MOI/lateral MOI) affect body displacement
+body_disp_model = lm(mean_bodyflick~head_vs_lateral_moi, data = all_data)
+summary(body_disp_model)
+```
+
+
+
+
+
+
